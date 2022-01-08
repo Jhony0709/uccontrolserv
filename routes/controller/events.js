@@ -1,4 +1,38 @@
+const nodemailer = require("nodemailer");
 const { pool } = require('../../dbconfig');
+
+const sendMail = async (mail, horas, evento) => {
+    /// Generate test SMTP service account from ethereal.email
+  // Only needed if you don't have a real mail account for testing
+  let testAccount = await nodemailer.createTestAccount();
+
+  // create reusable transporter object using the default SMTP transport
+  let transporter = nodemailer.createTransport({
+    host: "smtp.ethereal.email",
+    port: 587,
+    secure: false, // true for 465, false for other ports
+    auth: {
+      user: testAccount.user, // generated ethereal user
+      pass: testAccount.pass, // generated ethereal password
+    },
+  });
+
+  // send mail with defined transport object
+  let info = await transporter.sendMail({
+    from: '"UCC Control" <control@ucc.com>', // sender address
+    to: mail, // list of receivers
+    subject: "Horas registradas", // Subject line
+    text: `Se registró ${horas} hora/s para el evento ${evento}`, // plain text body
+    html: "", // html body
+  });
+
+  console.log("Message sent: %s", info.messageId);
+  // Message sent: <b658f8ca-6296-ccf4-8306-87d57a0b4321@example.com>
+
+  // Preview only available when sending through an Ethereal account
+  console.log("Preview URL: %s", nodemailer.getTestMessageUrl(info));
+  // Preview URL: https://ethereal.email/message/WaQKMgKddxQDoou...
+}
 
 const formatDate = (date) => {
     var d = new Date(date),
@@ -31,7 +65,7 @@ const newEvent = async (req, res) => {
     const response = await pool.query(
       `INSERT INTO eventos(
         tipo_evento, descripcion, hora_inicio, hora_fin, dimension, horas_otorgadas)
-        VALUES (${type}, '${nombre}', '${dateFrom}', '${dateTo}', ${dimension}, ${horas});`
+        VALUES (${type}, '${nombre}', '${dateFrom || new Date().toUTCString()}', '${dateTo || new Date().toUTCString()}', ${dimension}, ${horas});`
     );
     res.send(response.rows);
 };
@@ -88,8 +122,19 @@ const regEstEvent = async (req, res) => {
     ]);
 
     if (validateDate.rows.length === 0) {
-        const response = await pool.query(`INSERT INTO public.eventos_estudiante(id_estudiante, id_evento) VALUES (${id_estudiante}, ${id_evento});`);
-        // TO-DO: Email notification
+        const response = await pool.query(`INSERT INTO public.eventos_estudiante(id_estudiante, id_evento, fecha_asistencia) VALUES (${id_estudiante}, ${id_evento}, '${formatDate(new Date())}');`);
+        const getEventEst = await pool.query(`
+            SELECT st.email, ev.descripcion, ev.horas_otorgadas
+            FROM estudiantes AS st
+            JOIN eventos_estudiante AS ee
+                ON ee.id_estudiante = st.id
+            JOIN eventos AS ev
+                ON ee.id_evento = ev.id
+            WHERE st.id = ${id_estudiante}
+            AND ev.id = ${id_evento};
+        `);
+        const datos = getEventEst.rows[0];
+        sendMail(datos.email, datos.horas_otorgadas, datos.descripcion);
         res.send(response.rows);
     } else {
         res.status(500).send({message: 'No es posible registrar dos veces el mismo evento para el mismo día'});
